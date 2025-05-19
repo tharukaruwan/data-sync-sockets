@@ -3,9 +3,9 @@ const { MongoClient, ObjectId } = require('mongodb');
 const { io } = require('socket.io-client');
 
 const LOCAL_DB_URI       = 'mongodb://localhost:27017/imake-test';
-const YOUR_PUBLIC_SERVER_IP = 'localhost';
+const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
 // Your server URL (replace with your public IP/domain)
-const SERVER_URL = `http://${YOUR_PUBLIC_SERVER_IP}:3005`;
+const SERVER_URL = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 
 const POLL_INTERVAL_MS   = 2000;                     // retry interval when no docs
 
