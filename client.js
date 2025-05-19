@@ -2,68 +2,94 @@
 const { MongoClient, ObjectId } = require('mongodb');
 const { io } = require('socket.io-client');
 
-const LOCAL_DB_URI       = 'mongodb://localhost:27017/imake-test';
+const LOCAL_DB_URI         = 'mongodb://localhost:27017/imake-test';
 const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
-// Your server URL (replace with your public IP/domain)
-const SERVER_URL = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
-
-const POLL_INTERVAL_MS   = 2000;                     // retry interval when no docs
+const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
+const POLL_INTERVAL_MS     = 2000;  // retry interval when no docs
 
 async function startClient() {
+  // 1) Connect socket
   const socket = io(SERVER_URL, { reconnection: true });
 
   socket.on('connect', () => {
     console.log(`✅ Connected to server: ${socket.id}`);
-    // kick off the sync loop once connected
-    syncLoop();
+    syncLoop();            // start client→server sync
   });
 
   socket.on('disconnect', () => {
     console.log('❌ Disconnected from server, will retry on reconnect');
   });
 
-  // handle ack for a single doc
+  // 2) Handle server→client pushes
+  socket.on('server-sync', async (payload) => {
+    const { _id: queueId, collection: collName, document: doc } = payload;
+    console.log(`⬅️ Received server-sync doc ${queueId} for ${collName}:`, doc);
+
+    try {
+      // apply into local DB
+      const coll = localDb.collection(collName);
+      const { _id, ...data } = doc;
+      await coll.updateOne(
+        { _id: new ObjectId(_id) },
+        { $set: data },
+        { upsert: true }
+      );
+      console.log(`✔️ Applied server doc ${_id} to local ${collName}`);
+
+      // ack back to server so it can delete
+      socket.emit('server-ack', { status: 'received', id: queueId });
+    } catch (err) {
+      console.error(`❌ Error applying server doc ${queueId}:`, err);
+      // let server retry later
+      socket.emit('server-ack', { status: 'error', id: queueId, error: err.message });
+    }
+  });
+
+  // 3) Handle ack from server for our outgoing docs
   socket.on('ack', async ({ status, id }) => {
     if (status === 'saved') {
-      console.log(`📬 Server ack saved for doc ${id}`);
+      console.log(`📬 Server ack saved for our doc ${id}`);
       await deleteLocalDoc(id);
-      // immediately try the next doc
       await syncLoop();
     } else {
-      console.error(`⚠️ Server error for doc ${id}:`, status);
-      // you could choose to retry or skip
+      console.error(`⚠️ Server error for our doc ${id}:`, status);
       setTimeout(syncLoop, POLL_INTERVAL_MS);
     }
   });
 
-  // shared DB client
-  const client = await MongoClient.connect(LOCAL_DB_URI);
-  const db = client.db();
-  const collection = db.collection('pending_queue');
+  // 4) Connect to local MongoDB
+  const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
+  console.log('🌱 Connected to local MongoDB');
+  const localDb     = client.db();
+  const queueColl   = localDb.collection('pending_queue');
 
-  // helper: find one pending doc
+  // helper: grab oldest pending
   async function getNextDoc() {
-    return collection.findOne({}, { sort: { _id: 1 } });
+    return queueColl.findOne({}, { sort: { _id: 1 } });
   }
 
-  // helper: delete by _id
+  // helper: delete after ack
   async function deleteLocalDoc(id) {
-    await collection.deleteOne({ _id: new ObjectId(id) });
-    console.log(`🗑  Deleted local doc ${id}`);
+    await queueColl.deleteOne({ _id: new ObjectId(id) });
+    console.log(`🗑 Deleted local pending doc ${id}`);
   }
 
-  // main sync loop
+  // 5) client→server sync loop
   async function syncLoop() {
-    const doc = await getNextDoc();
-    if (doc) {
-      console.log('➡️ Syncing document:', doc);
-      socket.emit('sync-data', doc);
-      // wait for the 'ack' handler to delete & continue
-    } else {
-      // no docs right now → retry after a delay
+    try {
+      const doc = await getNextDoc();
+      if (doc) {
+        console.log('➡️ Syncing local doc to server:', doc);
+        socket.emit('sync-data', doc);
+        // wait for the 'ack' event before continuing
+      } else {
+        setTimeout(syncLoop, POLL_INTERVAL_MS);
+      }
+    } catch (err) {
+      console.error('❌ syncLoop error:', err);
       setTimeout(syncLoop, POLL_INTERVAL_MS);
     }
   }
 }
 
-startClient().catch(err => console.error('❌ Client error:', err));
+startClient().catch(err => console.error('❌ Client startup error:', err));
