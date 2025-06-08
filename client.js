@@ -7,6 +7,28 @@ const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
 const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 const POLL_INTERVAL_MS     = 2000;  // retry interval when no docs
 
+function reviveObjectIds(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(reviveObjectIds);
+  } else if (obj && typeof obj === 'object') {
+    const newObj = {};
+    for (const key in obj) {
+      if (
+        obj[key] &&
+        typeof obj[key] === 'object' &&
+        '$oid' in obj[key]
+      ) {
+        newObj[key] = new ObjectId(obj[key]['$oid']);
+      } else {
+        newObj[key] = reviveObjectIds(obj[key]);
+      }
+    }
+    return newObj;
+  }
+  return obj;
+}
+
+
 async function startClient() {
   // 1) Connect to local MongoDB first
   const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
@@ -36,7 +58,7 @@ async function startClient() {
       const { _id, ...data } = doc;
       await coll.updateOne(
         { _id: new ObjectId(_id) },
-        { $set: data },
+        { $set: reviveObjectIds(data) },
         { upsert: true }
       );
       console.log(`✔️ Applied server doc ${_id} to local ${collName}`);
