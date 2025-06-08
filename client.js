@@ -7,6 +7,30 @@ const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
 const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 const POLL_INTERVAL_MS     = 2000; // retry interval when no docs
 
+function convertObjectIdStrings(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(item => convertObjectIdStrings(item));
+  }
+
+  if (obj && typeof obj === 'object') {
+    const newObj = {};
+    for (const [key, value] of Object.entries(obj)) {
+      newObj[key] = convertObjectIdStrings(value);
+    }
+    return newObj;
+  }
+
+  if (typeof obj === 'string' && /^[a-f\d]{24}$/i.test(obj)) {
+    try {
+      return new ObjectId(obj);
+    } catch (e) {
+      return obj; // if somehow fails, return original
+    }
+  }
+
+  return obj;
+}
+
 async function startClient() {
   // 1) Connect to local MongoDB
   const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
@@ -64,7 +88,7 @@ async function startClient() {
 
       await coll.updateOne(
         { _id: new ObjectId(_id) },
-        { $set: data },
+        { $set: convertObjectIdStrings(data) },
         { upsert: true }
       );
       console.log(`✔️ Applied server doc ${_id} to local ${collName}`);

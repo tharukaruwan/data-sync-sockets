@@ -9,6 +9,30 @@ const ONLINE_DB_URI     = process.env.DB || 'mongodb://127.0.0.1:27017/imake-sat
 const PORT              = process.env.PORT || 3011;
 const SERVER_POLL_MS    = 2000;  // retry interval for server queue
 
+function convertObjectIdStrings(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(item => convertObjectIdStrings(item));
+  }
+
+  if (obj && typeof obj === 'object') {
+    const newObj = {};
+    for (const [key, value] of Object.entries(obj)) {
+      newObj[key] = convertObjectIdStrings(value);
+    }
+    return newObj;
+  }
+
+  if (typeof obj === 'string' && /^[a-f\d]{24}$/i.test(obj)) {
+    try {
+      return new ObjectId(obj);
+    } catch (e) {
+      return obj; // if somehow fails, return original
+    }
+  }
+
+  return obj;
+}
+
 async function startServer() {
   // 1) Connect to MongoDB
   let client;
@@ -53,7 +77,7 @@ async function startServer() {
         const coll = db.collection(collName);
         await coll.updateOne(
           { _id: new ObjectId(_id) },
-          { $set: data },
+          { $set: convertObjectIdStrings(data) },
           { upsert: true }
         );
         console.log(`✔️ Upserted doc ${_id} into ${collName}`);
