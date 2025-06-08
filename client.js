@@ -7,17 +7,19 @@ const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
 const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 const POLL_INTERVAL_MS     = 2000;  // retry interval when no docs
 
-function serializeObjectIds(obj) {
+function serializeSpecialTypes(obj) {
   if (Array.isArray(obj)) {
-    return obj.map(serializeObjectIds);
+    return obj.map(serializeSpecialTypes);
   } else if (obj && typeof obj === 'object') {
     const newObj = {};
     for (const key in obj) {
       const val = obj[key];
       if (val instanceof ObjectId) {
         newObj[key] = { $oid: val.toHexString() };
+      } else if (val instanceof Date) {
+        newObj[key] = { $date: val.toISOString() };
       } else {
-        newObj[key] = serializeObjectIds(val);
+        newObj[key] = serializeSpecialTypes(val);
       }
     }
     return newObj;
@@ -26,25 +28,22 @@ function serializeObjectIds(obj) {
 }
 
 async function startClient() {
-  // 4) Connect to local MongoDB
   const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
   console.log('🌱 Connected to local MongoDB');
   const localDb     = client.db();
   const queueColl   = localDb.collection('pending_queue');
 
-  // 1) Connect socket
   const socket = io(SERVER_URL, { reconnection: true });
 
   socket.on('connect', () => {
     console.log(`✅ Connected to server: ${socket.id}`);
-    syncLoop();            // start client→server sync
+    syncLoop();
   });
 
   socket.on('disconnect', () => {
     console.log('❌ Disconnected from server, will retry on reconnect');
   });
 
-  // 2) Handle server→client pushes
   socket.on('server-sync', async (payload) => {
     const { _id: queueId, collection: collName, document: doc } = payload;
     console.log(`⬅️ Received server-sync doc ${queueId} for ${collName}:`, doc);
@@ -53,7 +52,7 @@ async function startClient() {
       const coll = localDb.collection(collName);
       const { _id, ...data } = doc;
       await coll.updateOne(
-        { _id },
+        { _id: new ObjectId(_id) },
         { $set: data },
         { upsert: true }
       );
@@ -66,7 +65,6 @@ async function startClient() {
     }
   });
 
-  // 3) Handle ack from server for our outgoing docs
   socket.on('ack', async ({ status, id }) => {
     if (status === 'saved') {
       console.log(`📬 Server ack saved for our doc ${id}`);
@@ -78,24 +76,21 @@ async function startClient() {
     }
   });
 
-  // helper: grab oldest pending
   async function getNextDoc() {
     return queueColl.findOne({}, { sort: { _id: 1 } });
   }
 
-  // helper: delete after ack
   async function deleteLocalDoc(id) {
     await queueColl.deleteOne({ _id: new ObjectId(id) });
     console.log(`🗑 Deleted local pending doc ${id}`);
   }
 
-  // 5) client→server sync loop
   async function syncLoop() {
     try {
       const doc = await getNextDoc();
       if (doc) {
         console.log('➡️ Syncing local doc to server:', doc);
-        const safeDoc = serializeObjectIds(doc);
+        const safeDoc = serializeSpecialTypes(doc);
         socket.emit('sync-data', safeDoc);
       } else {
         setTimeout(syncLoop, POLL_INTERVAL_MS);
