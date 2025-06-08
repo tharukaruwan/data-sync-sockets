@@ -5,30 +5,9 @@ const cors          = require('cors');
 const { Server }    = require('socket.io');
 const { MongoClient, ObjectId } = require('mongodb');
 
-const ONLINE_DB_URI     = process.env.DB || 'mongodb+srv://areduglobe:QJXetE6HydeVuOg9@areduglobedb.iwzzl.mongodb.net/imake-test';
+const ONLINE_DB_URI     = process.env.DB || 'mongodb://127.0.0.1:27017/imake-satglobal';
 const PORT              = process.env.PORT || 3011;
 const SERVER_POLL_MS    = 2000;  // retry interval for server queue
-
-function reviveObjectIds(obj) {
-  if (Array.isArray(obj)) {
-    return obj.map(reviveObjectIds);
-  } else if (obj && typeof obj === 'object') {
-    const newObj = {};
-    for (const key in obj) {
-      if (
-        obj[key] &&
-        typeof obj[key] === 'object' &&
-        '$oid' in obj[key]
-      ) {
-        newObj[key] = new ObjectId(obj[key]['$oid']);
-      } else {
-        newObj[key] = reviveObjectIds(obj[key]);
-      }
-    }
-    return newObj;
-  }
-  return obj;
-}
 
 async function startServer() {
   // 1) Connect to MongoDB
@@ -74,7 +53,7 @@ async function startServer() {
         const coll = db.collection(collName);
         await coll.updateOne(
           { _id: new ObjectId(_id) },
-          { $set: reviveObjectIds(data) },
+          { $set: data },
           { upsert: true }
         );
         console.log(`✔️ Upserted doc ${_id} into ${collName}`);
