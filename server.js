@@ -52,7 +52,7 @@ async function startServer() {
         const { _id, ...data } = doc;
         const coll = db.collection(collName);
         await coll.updateOne(
-          { _id: new ObjectId(_id) },
+          { _id },
           { $set: data },
           { upsert: true }
         );

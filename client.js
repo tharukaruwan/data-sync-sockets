@@ -7,7 +7,31 @@ const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
 const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 const POLL_INTERVAL_MS     = 2000;  // retry interval when no docs
 
+function serializeObjectIds(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(serializeObjectIds);
+  } else if (obj && typeof obj === 'object') {
+    const newObj = {};
+    for (const key in obj) {
+      const val = obj[key];
+      if (val instanceof ObjectId) {
+        newObj[key] = { $oid: val.toHexString() };
+      } else {
+        newObj[key] = serializeObjectIds(val);
+      }
+    }
+    return newObj;
+  }
+  return obj;
+}
+
 async function startClient() {
+  // 4) Connect to local MongoDB
+  const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
+  console.log('🌱 Connected to local MongoDB');
+  const localDb     = client.db();
+  const queueColl   = localDb.collection('pending_queue');
+
   // 1) Connect socket
   const socket = io(SERVER_URL, { reconnection: true });
 
@@ -26,21 +50,18 @@ async function startClient() {
     console.log(`⬅️ Received server-sync doc ${queueId} for ${collName}:`, doc);
 
     try {
-      // apply into local DB
       const coll = localDb.collection(collName);
       const { _id, ...data } = doc;
       await coll.updateOne(
-        { _id: new ObjectId(_id) },
+        { _id },
         { $set: data },
         { upsert: true }
       );
       console.log(`✔️ Applied server doc ${_id} to local ${collName}`);
 
-      // ack back to server so it can delete
       socket.emit('server-ack', { status: 'received', id: queueId });
     } catch (err) {
       console.error(`❌ Error applying server doc ${queueId}:`, err);
-      // let server retry later
       socket.emit('server-ack', { status: 'error', id: queueId, error: err.message });
     }
   });
@@ -56,12 +77,6 @@ async function startClient() {
       setTimeout(syncLoop, POLL_INTERVAL_MS);
     }
   });
-
-  // 4) Connect to local MongoDB
-  const client = await MongoClient.connect(LOCAL_DB_URI, { useUnifiedTopology: true });
-  console.log('🌱 Connected to local MongoDB');
-  const localDb     = client.db();
-  const queueColl   = localDb.collection('pending_queue');
 
   // helper: grab oldest pending
   async function getNextDoc() {
@@ -80,8 +95,8 @@ async function startClient() {
       const doc = await getNextDoc();
       if (doc) {
         console.log('➡️ Syncing local doc to server:', doc);
-        socket.emit('sync-data', doc);
-        // wait for the 'ack' event before continuing
+        const safeDoc = serializeObjectIds(doc);
+        socket.emit('sync-data', safeDoc);
       } else {
         setTimeout(syncLoop, POLL_INTERVAL_MS);
       }
