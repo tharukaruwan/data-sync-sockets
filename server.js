@@ -84,12 +84,12 @@ async function startServer() {
         socket.emit('ack', { status: 'saved', id: queDocId });
       } catch (err) {
         console.error('❌ Error upserting client doc:', err);
-        socket.emit('ack', { status: 'error', error: err.message });
+        socket.emit('ack', { status: 'error', error: err.message, id: queDocId });
       }
     });
 
     // B) Handle client’s ack for server → client push
-    socket.on('server-ack', async ({ status, id }) => {
+    socket.on('server-ack', async ({ status, id, error }) => {
       if (status === 'received') {
         console.log(`📬 Client ${socket.id} ack’d server doc ${id}`);
         try {
@@ -98,7 +98,11 @@ async function startServer() {
           console.error('❌ Failed to delete pending_queue doc:', e);
         }
       } else {
-        console.warn(`⚠️ Client ${socket.id} reported error for doc ${id}:`, status);
+        await pendingQueue.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { error: true, errorMessage: error } }
+        );
+        console.warn(`⚠️ Client ${socket.id} reported error for doc ${id}:`, status, error);
       }
       // immediately try the next pending for this socket
       serverSyncLoop(socket);

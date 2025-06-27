@@ -101,13 +101,19 @@ async function startClient() {
   });
 
   // 7) Handle server ack for sent docs
-  socket.on('ack', async ({ status, id }) => {
+  socket.on('ack', async ({ status, id, error }) => {
     if (status === 'saved') {
       console.log(`📬 Server ack saved for our doc ${id}`);
       await deleteLocalDoc(id);
       await syncLoop();
     } else {
-      console.error(`⚠️ Server error for our doc ${id}:`, status);
+      console.error(`⚠️ Server error for our doc status ${id}:`, status);
+      console.error(`⚠️ Server error for our doc error ${id}:`, error);
+      // ✅ Update the document to mark as failed
+      await queueColl.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { error: true, errorMessage: error } }
+      );
       setTimeout(syncLoop, POLL_INTERVAL_MS);
     }
   });
