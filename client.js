@@ -3,9 +3,10 @@ const { MongoClient, ObjectId } = require('mongodb');
 const { io } = require('socket.io-client');
 
 const LOCAL_DB_URI         = 'mongodb+srv://areduglobe:QJXetE6HydeVuOg9@areduglobedb.iwzzl.mongodb.net/imake';
-const YOUR_PUBLIC_SERVER_IP = '172.235.63.132';
+const YOUR_PUBLIC_SERVER_IP= '172.235.63.132';
 const SERVER_URL           = `http://${YOUR_PUBLIC_SERVER_IP}:3011`;
 const POLL_INTERVAL_MS     = 2000; // retry interval when no docs
+const SERVER_LOCATION      = '68457e58000ebc17dd275782';
 
 function convertObjectIdStrings(obj) {
   if (Array.isArray(obj)) {
@@ -70,6 +71,7 @@ async function startClient() {
 
   socket.on('connect', () => {
     console.log(`✅ Connected to server: ${socket.id}`);
+    socket.emit('register-location', SERVER_LOCATION); // Let server know your location
     syncLoop();
   });
 
@@ -79,9 +81,13 @@ async function startClient() {
 
   // 6) Handle server→client data push
   socket.on('server-sync', async (payload) => {
-    const { _id: queueId, collection: collName, document: doc } = payload;
+    const { _id: queueId, collection: collName, document: doc, locationTo } = payload;
     console.log(`⬅️ Received server-sync doc ${queueId} for ${collName}:`, doc);
-
+    if (locationTo != SERVER_LOCATION) {
+      console.error(`❌ Incorrect to location received doc ${queueId} for ${locationTo}:`);
+      socket.emit('server-ack', { status: 'error', id: queueId, error: `Incorrect to location received doc ${queueId} for ${locationTo}:` });
+      return;
+    } 
     try {
       const coll = localDb.collection(collName);
       const { _id, ...data } = doc;

@@ -7,7 +7,8 @@ const { MongoClient, ObjectId } = require('mongodb');
 
 const ONLINE_DB_URI     = process.env.DB || 'mongodb://127.0.0.1:27017/imake-satglobal';
 const PORT              = process.env.PORT || 3011;
-const SERVER_POLL_MS    = 2000;  // retry interval for server queue
+const SERVER_POLL_MS    = 2000;
+const PUSH_LOCATIONS    = '68457e58000ebc17dd275782,68457e6e000ebc17dd275794,68457e86000ebc17dd2757a7';
 
 function convertObjectIdStrings(obj) {
   if (Array.isArray(obj)) {
@@ -54,7 +55,7 @@ async function startServer() {
 
   // Helper: fetch the oldest pending doc
   async function getNextPending() {
-    return pendingQueue.findOne({}, { sort: { _id: 1 } });
+    return pendingQueue.findOne({}, { sort: { _id: 1 } }); // IF NEEDED WE CAN ILLIMINATE ERRORS
   }
 
   // Helper: delete by queue doc _id
@@ -67,10 +68,23 @@ async function startServer() {
   io.on('connection', (socket) => {
     console.log(`✅ Client connected: ${socket.id}`);
 
+    // Save the client's location
+    socket.on('register-location', (locationId) => {
+      socket.locationId = locationId;
+      console.log(`📍 Registered client ${socket.id} with location ${locationId}`);
+      // Start the sync loop only after registration
+      serverSyncLoop(socket);
+    });
+
     // A) Handle incoming client → server sync-data
     socket.on('sync-data', async (payload) => {
-      const { collection: collName, document: doc, _id: queDocId } = payload;
+      const { collection: collName, document: doc, _id: queDocId, locationTo, location, ts } = payload;
       console.log(`📨 Received ${collName} document from client:`, doc);
+      // if (locationTo != SERVER_LOCATION) {
+      //   console.error(`❌ Incorrect to location received doc ${queDocId} for ${locationTo}:`);
+      //   socket.emit('ack', { status: 'error', error: `Incorrect to location received doc ${queDocId} for ${locationTo}:`, id: queDocId });
+      //   return;
+      // }
       try {
         // strip immutable _id on update
         const { _id, ...data } = doc;
@@ -81,6 +95,25 @@ async function startServer() {
           { upsert: true }
         );
         console.log(`✔️ Upserted doc ${_id} into ${collName}`);
+        // ✅ Push to each location in PUSH_LOCATIONS
+        const pushLocations = PUSH_LOCATIONS.split(',').map(id => id.trim());
+
+        for (const pushLocation of pushLocations) {
+          if (pushLocation === locationTo) continue;
+
+          const queueDoc = {
+            collection: collName,
+            document: doc,
+            location: location,
+            locationTo: pushLocation,
+            ts,
+            error: false,
+            errorMessage: null,
+          };
+
+          await db.collection('pending_queue').insertOne(queueDoc);
+          console.log(`🆕 Queued doc ${doc._id} for sync to location ${pushLocation}`);
+        }
         socket.emit('ack', { status: 'saved', id: queDocId });
       } catch (err) {
         console.error('❌ Error upserting client doc:', err);
@@ -120,12 +153,20 @@ async function startServer() {
   // 4) The server → client sync loop
   async function serverSyncLoop(socket) {
     try {
-      const doc = await getNextPending();
+      if (!socket.locationId) {
+        console.warn(`⚠️ Socket ${socket.id} has no registered locationId.`);
+        return;
+      }
+
+      // const doc = await getNextPending();
+      const doc = await pendingQueue.findOne(
+        { locationTo: socket.locationId }, // ✅ DB filters docs by location
+        { sort: { _id: 1 } }
+      );
+
       if (doc) {
-        console.log(`➡️ Pushing pending doc ${doc._id} to ${socket.id}`);
-        // send the full document as-is; client must reply with 'server-ack'
+        console.log(`➡️ Pushing doc ${doc._id} to client ${socket.id} (location: ${socket.locationId})`);
         socket.emit('server-sync', doc);
-        // then wait for their 'server-ack' before calling serverSyncLoop again
       } else {
         // no pending docs right now → retry after a delay
         setTimeout(() => serverSyncLoop(socket), SERVER_POLL_MS);
